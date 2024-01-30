@@ -72,7 +72,7 @@ def construct_sparse_pauli_op(matrix, dimension):
     return SparsePauliOp.from_list(result)
 
 
-def hamiltonian_evolution(hamiltonian, qubit_count, time=1, initial_state=None):
+def hamiltonian_evolution(hamiltonian, qubit_count, time=1, initial_state=None, num_timesteps=1):
     pauli_hamiltonian = construct_sparse_pauli_op(hamiltonian, qubit_count)
 
     # Hamiltonian evolution library from Qiskit
@@ -80,7 +80,7 @@ def hamiltonian_evolution(hamiltonian, qubit_count, time=1, initial_state=None):
         initial_state = QuantumCircuit(qubit_count)
     evolution_problem = TimeEvolutionProblem(pauli_hamiltonian, time, initial_state)
     estimator = Estimator()
-    trotter = TrotterQRTE(estimator=estimator)
+    trotter = TrotterQRTE(estimator=estimator, num_timesteps=num_timesteps)
     return trotter.evolve(evolution_problem).evolved_state
 
 

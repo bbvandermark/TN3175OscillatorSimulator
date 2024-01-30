@@ -1,64 +1,74 @@
-import matplotlib.pyplot as plt
-import numpy as np
+from matplotlib import pyplot as plt
 from qiskit import Aer, transpile
 from qiskit.quantum_info import Statevector
 
-from matrix_utils import next_power_of_2, generate_m, generate_k, construct_hamiltonian, hamiltonian_evolution
+from matrix_utils import next_power_of_2, generate_m, generate_k, generate_f, hamiltonian_evolution
+import numpy as np
+
 from visualization_utils import create_animation
 
 
-def simulate_encoding_one(masses, spring_constants, initial_pos, initial_vel):
+def construct_hamiltonian(masses, spring_constants, B, B_dagger):
     qubits = next_power_of_2(len(masses))
-    dim = 2 ** qubits
+    dim = 2**qubits
+
+    h = -1*np.block([[np.zeros((dim,dim)),B],[B_dagger,np.zeros((dim,dim))]])
+    qubits = qubits + 1  # One more qubit needed because hamiltonian was doubled during block encoding
+    return [h, qubits]
+
+
+def encoding_one(masses, spring_constants, initial_pos, initial_vel):
+    qubits = next_power_of_2(len(masses))
+    dim = 2**qubits
+    times = np.linspace(0, 10, 100)
 
     M = generate_m(masses, dim)
     K = generate_k(spring_constants, dim)
-
-    F = np.zeros((dim, dim))
-    for i in range(dim):
-        for j in range(dim):
-            if i != j:
-                F[i][j] = -K[i][j]
-            else:
-                for l in range(dim):
-                    F[i][i] += K[i][l]
+    F = generate_f(K, dim)
 
     A = np.matmul(np.linalg.inv(np.sqrt(M)), np.matmul(F, np.linalg.inv(np.sqrt(M))))
     B = np.linalg.cholesky(A)
     B_dagger = np.conjugate(B).T
 
-    initial_pos = np.matmul(np.sqrt(M), initial_pos)
+    A_pseudoinv = np.linalg.pinv(A)
+    B_pseudoinv = np.linalg.pinv(B)
+    P = np.eye(dim) - np.matmul(A_pseudoinv,A)
 
+    initial_pos = np.matmul(np.sqrt(M), initial_pos)
     initial_vel = np.matmul(np.sqrt(M), initial_vel)
 
-    def create_evolution(time):
+    def evolve_encoding_one(time):
         first_comp = initial_vel
+
         second_comp = 1j * np.matmul(B_dagger, initial_pos)
 
-        initial_state = np.concatenate((first_comp, second_comp))
+        initial_state = np.concatenate((first_comp,second_comp))
 
         norm = np.linalg.norm(initial_state)
 
-        initial_vec = Statevector(initial_state / np.linalg.norm(initial_state))
+        normalized_initial_state = initial_state / np.linalg.norm(initial_state)
+        initial_vec = Statevector(normalized_initial_state)
 
-        [hamiltonian, qubits] = construct_hamiltonian(masses, spring_constants)
-        evolution_one = hamiltonian_evolution(hamiltonian, qubits, initial_state=initial_vec, time=time)
+        [hamiltonian,qubits] = construct_hamiltonian(masses,spring_constants, B, B_dagger)
+        evolution_one = hamiltonian_evolution(hamiltonian, qubits, initial_state=initial_vec, time=time, num_timesteps=50)
         return [evolution_one, norm]
 
-    times = np.linspace(0, 10, 100)
+    # plot results
+
     counts = []
-    res1 = []
-    res2 = []
-    vel1 = []
-    vel2 = []
+
+    position1_first = []
+    position2_first = []
+    velocity1_first = []
+    velocity2_first = []
     for i in times:
-        [qc, norm] = create_evolution(i)
+        [qc, norm] = evolve_encoding_one(i)
 
         result_one = np.array(Statevector(qc))
 
-        l = int(len(result_one) / 2)
+        l = int(len(result_one)/2)
 
-        result_one = result_one * norm
+        result_one = result_one*norm
         vel = result_one[:l]
         pos = result_one[l:]
 
@@ -66,51 +76,51 @@ def simulate_encoding_one(masses, spring_constants, initial_pos, initial_vel):
         pos = pos * (-1j)
         pos = np.matmul(np.linalg.inv(B_dagger), pos)
 
-        pos = np.matmul(np.linalg.inv(np.sqrt(M)), pos)
-        vel = np.matmul(np.linalg.inv(np.sqrt(M)), vel)
-        res1.append(pos[0])
-        res2.append(pos[1])
-        vel1.append(vel[0])
-        vel2.append(vel[1])
+        pos = np.matmul(np.linalg.inv(np.sqrt(M)),pos)
+        vel = np.matmul(np.linalg.inv(np.sqrt(M)),vel)
+        qc.measure_all()
+        simulator = Aer.get_backend('aer_simulator')
+        circ = transpile(qc, simulator)
+        result = simulator.run(circ).result()
+        counts = result.get_counts(qc)
+        position1_first.append(pos[0])
+        position2_first.append(pos[1])
 
-    plt.plot(times, res1)
-    plt.plot(times, vel1)
+        velocity1_first.append(vel[0])
+        velocity2_first.append(vel[1])
+
+    plt.plot(times, position1_first)
+    plt.plot(times, position2_first)
     plt.show()
-    plt.plot(times, res2)
-    plt.plot(times, vel2)
-    plt.show()
 
-    create_animation(times, [res1, res2], "quantum_encoding_1.gif")
+    create_animation(times, [position1_first, position2_first], "quantum_encoding_1.gif")
 
+    return position1_first, position2_first, velocity1_first, velocity2_first, times
 
-# second type of encoding
-
-def simulate_encoding_two(masses, spring_constants, initial_pos, initial_vel):
+def encoding_two(masses, spring_constants, initial_pos, initial_vel):
     qubits = next_power_of_2(len(masses))
     dim = 2 ** qubits
+    times = np.linspace(0, 10, 100)
 
     M = generate_m(masses, dim)
     K = generate_k(spring_constants, dim)
-
-    F = np.zeros((dim, dim))
-    for i in range(dim):
-        for j in range(dim):
-            if i != j:
-                F[i][j] = -K[i][j]
-            else:
-                for l in range(dim):
-                    F[i][i] += K[i][l]
+    F = generate_f(K, dim)
 
     A = np.matmul(np.linalg.inv(np.sqrt(M)), np.matmul(F, np.linalg.inv(np.sqrt(M))))
     B = np.linalg.cholesky(A)
+    B_dagger = np.conjugate(B).T
 
     A_pseudoinv = np.linalg.pinv(A)
     B_pseudoinv = np.linalg.pinv(B)
     P = np.eye(dim) - np.matmul(A_pseudoinv, A)
 
-    def evolve2(time):
-        first_comp = np.matmul(P, initial_pos)
-        second_comp = -1j * np.matmul(np.matmul(B_pseudoinv, P), initial_vel)
+    initial_pos = np.matmul(np.sqrt(M), initial_pos)
+    initial_vel = np.matmul(np.sqrt(M), initial_vel)
+
+    def evolve_encoding_two(time):
+        first_comp = -np.matmul(B, np.matmul(B_dagger, initial_pos))
+
+        second_comp = 1j * np.matmul(B_dagger, initial_vel)
 
         initial_state = np.concatenate((first_comp, second_comp))
 
@@ -118,19 +128,24 @@ def simulate_encoding_two(masses, spring_constants, initial_pos, initial_vel):
 
         initial_vec = Statevector(initial_state / np.linalg.norm(initial_state))
 
-        [hamiltonian, qubits] = construct_hamiltonian(masses, spring_constants)
-        evolution_two = hamiltonian_evolution(hamiltonian, qubits, initial_state=initial_vec, time=time)
+        [hamiltonian, qubits] = construct_hamiltonian(masses, spring_constants, B, B_dagger)
+        evolution_two = hamiltonian_evolution(hamiltonian, qubits, initial_state=initial_vec, time=time, num_timesteps=50)
 
         return [evolution_two, norm_two]
 
-    # plot results second encoding
+    # plot results
 
-    times = np.linspace(0, 10, 100)
     counts = []
-    res = []
-    res_v = []
+
+    position1_second = []
+    position2_second = []
+    velocity1_second = []
+    velocity2_second = []
+
+    check = np.matmul(np.matmul(B, B_pseudoinv), P)
+
     for i in times:
-        [qc, norm_two] = evolve2(i)
+        [qc, norm_two] = evolve_encoding_two(i)
         result_two = np.array(Statevector(qc))
         l = int(len(result_two) / 2)
 
@@ -139,10 +154,9 @@ def simulate_encoding_two(masses, spring_constants, initial_pos, initial_vel):
         vel = result_two[l:]
         pos = result_two[:l]
 
-        pos = np.matmul(np.linalg.inv(P), pos)
+        pos = -np.matmul(np.linalg.inv(B_dagger), np.matmul(np.linalg.inv(B), pos))
 
-        vel = vel * 1j
-        vel = np.matmul(np.linalg.inv(P), np.matmul(np.linalg.inv(B_pseudoinv), vel))
+        vel = -1j * np.matmul(np.linalg.inv(B_dagger), vel)
 
         pos = np.matmul(np.linalg.inv(np.sqrt(M)), pos)
         vel = np.matmul(np.linalg.inv(np.sqrt(M)), vel)
@@ -152,70 +166,53 @@ def simulate_encoding_two(masses, spring_constants, initial_pos, initial_vel):
         circ = transpile(qc, simulator)
         result = simulator.run(circ).result()
         counts = result.get_counts(qc)
-        res.append(pos[0])
-        res_v.append(vel[0])
+        position1_second.append(pos[0])
+        position2_second.append(pos[1])
+        velocity1_second.append(vel[0])
+        velocity2_second.append(vel[1])
 
-    plt.plot(times, res)
-    plt.plot(times, res_v)
+    plt.plot(times, position1_second)
+    plt.plot(times, position2_second)
     plt.show()
 
-    # x -> y
-    initial_pos = np.matmul(np.sqrt(M), initial_pos)
+    create_animation(times, [position1_second, position2_second], "quantum_encoding_2.gif")
 
-    initial_vel = np.matmul(np.sqrt(M), initial_vel)
-
-    # second type of encoding
-
-    A_pseudoinv = np.linalg.pinv(A)
-    B_pseudoinv = np.linalg.pinv(B)
-    P = np.eye(dim) - np.matmul(A_pseudoinv, A)
+    return position1_second, position2_second, velocity1_second, velocity2_second, times
 
 
-    times = np.linspace(0, 10, 100)
-    res1 = []
-    res2 = []
-    vel1 = []
-    vel2 = []
-    for i in times:
-        [qc, norm_two] = evolve2(i)
-        result_two = np.array(Statevector(qc))
-        l = int(len(result_two) / 2)
+def get_difference(
+        position1_first, position2_first, velocity1_first, velocity2_first,
+        position1_second, position2_second, velocity1_second, velocity2_second,
+        times
+):
+    pos_diff = []
+    vel_diff = []
+    for i in range(len(position1_first)):
+        pos_diff.append(np.abs(position1_first[i]-position1_second[i]) + np.abs(position2_first[i]-position2_second[i]))
+        vel_diff.append(np.abs(velocity1_first[i]-velocity1_second[i]) + np.abs(velocity2_first[i]-velocity2_second[i]))
 
-        result_two = result_two * norm_two
-
-        vel = result_two[l:]
-        pos = result_two[:l]
-
-        pos = np.matmul(np.linalg.inv(P), pos)
-
-        vel = vel * (1j)
-        vel = np.matmul(np.linalg.inv(P), np.matmul(np.linalg.inv(B_pseudoinv), vel))
-
-        pos = np.matmul(np.linalg.inv(np.sqrt(M)), pos)
-        vel = np.matmul(np.linalg.inv(np.sqrt(M)), vel)
-
-        qc.measure_all()
-        simulator = Aer.get_backend('aer_simulator')
-        circ = transpile(qc, simulator)
-        result = simulator.run(circ).result()
-        counts = result.get_counts(qc)
-        res1.append(pos[0])
-        res2.append(pos[1])
-        vel1.append(vel[0])
-        vel2.append(vel[1])
-
-    plt.plot(times, res1)
-    plt.plot(times, vel1)
+    plt.plot(times, pos_diff)
+    plt.plot(times, vel_diff)
+    plt.xlabel('Time')
+    plt.ylabel('Difference between first and second encoding')
+    plt.legend(['position differences', 'velocity differences'])
     plt.show()
-    plt.plot(times, res2)
-    plt.plot(times, vel2)
-    plt.show()
-
-    create_animation(times, [res1, res2], "quantum_encoding_2.gif")
 
 
 def example():
-    print("Simulation of a system using the first encoding provided in the paper")
-    simulate_encoding_one([1, 1], [[0, 0, 1], [0, 1, 1], [1, 1, 1]], [1, 2], [1, -1])
-    print("Simulation of the same system using the encoding provided in the appendix")
-    simulate_encoding_two([1, 1], [[0, 0, 1], [0, 1, 1], [1, 1, 1]], [1, 2], [1, -1])
+    masses = [1, 1]
+    spring_constants = [[0, 0, 1], [0, 1, 1], [1, 1, 1]]
+    initial_pos = [1, 2]
+    initial_vel = [1, -1]
+
+    print("Simulating 2 masses, each coupled to each other and to a wall using the first encoding from the paper")
+    position1_first, position2_first, velocity1_first, velocity2_first, times = (
+        encoding_one(masses, spring_constants, initial_pos, initial_vel))
+    print("Simulating the same system with the second encoding from the paper")
+    position1_second, position2_second, velocity1_second, velocity2_second, times = (
+        encoding_two(masses, spring_constants, initial_pos, initial_vel))
+    get_difference(
+        position1_first, position2_first, velocity1_first, velocity2_first,
+        position1_second, position2_second, velocity1_second, velocity2_second,
+        times
+    )
